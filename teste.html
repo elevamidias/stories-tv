@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teste Yeloo – tela vertical</title>
+<style>
+  :root{
+    --bg:#0e1116; --fg:#f2f2f2; --mut:#8b95a5; --ok:#3ddc84; --bad:#ff5d5d; --warn:#ffb020; --line:#232a36;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+  /* moldura: se você não vê as 4 bordas âmbar, a tela está cortando a página */
+  .frame{position:fixed;inset:0;border:1.2vw solid var(--warn);pointer-events:none;z-index:9}
+  main{height:100%;display:grid;grid-template-rows:auto auto 1fr auto;gap:2.2vw;padding:3.6vw}
+  .dim{font-size:3.4vw;color:var(--mut);display:flex;justify-content:space-between;gap:2vw}
+  .dim b{color:var(--fg);font-weight:600}
+  .clock{font-size:17vw;font-weight:700;letter-spacing:-.02em;line-height:1;
+    font-variant-numeric:tabular-nums}
+  .clock small{display:block;font-size:3.4vw;font-weight:400;color:var(--mut);letter-spacing:0;margin-top:1vw}
+  .video-wrap{position:relative;min-height:0;display:flex;justify-content:center}
+  video{height:100%;max-width:100%;aspect-ratio:9/16;object-fit:contain;background:#000;border:.3vw solid var(--line)}
+  .checks{list-style:none;display:grid;gap:1.2vw}
+  .checks li{display:flex;align-items:baseline;gap:2vw;font-size:3.6vw;line-height:1.25;
+    border-top:.2vw solid var(--line);padding-top:1.2vw}
+  .checks .dot{flex:none;width:3.4vw;height:3.4vw;border-radius:50%;background:var(--mut);transform:translateY(.2vw)}
+  .checks .t{flex:1}
+  .checks .t span{display:block;font-size:2.8vw;color:var(--mut)}
+  .checks li[data-s=ok] .dot{background:var(--ok)}
+  .checks li[data-s=bad] .dot{background:var(--bad)}
+  .checks li[data-s=warn] .dot{background:var(--warn)}
+  .checks li[data-s=ok] .v{color:var(--ok)}
+  .checks li[data-s=bad] .v{color:var(--bad)}
+  .checks li[data-s=warn] .v{color:var(--warn)}
+  .v{font-weight:600;text-align:right}
+</style>
+</head>
+<body>
+<div class="frame"></div>
+<main>
+  <div class="dim">
+    <span>Tela <b id="res">–</b></span>
+    <span>Proporção <b id="ratio">–</b></span>
+    <span id="orient"><b>–</b></span>
+  </div>
+
+  <div class="clock"><span id="clock">--:--:--</span>
+    <small>Aberta há <b id="uptime">0s</b> · página carregada às <b id="loadedAt">–</b></small>
+  </div>
+
+  <div class="video-wrap">
+    <video id="vid" src="teste.mp4" muted loop autoplay playsinline preload="auto"></video>
+  </div>
+
+  <ul class="checks">
+    <li id="c-js" data-s="warn"><i class="dot"></i><div class="t">JavaScript<span>o relógio acima deve andar</span></div><div class="v">aguardando</div></li>
+    <li id="c-vid" data-s="warn"><i class="dot"></i><div class="t">Vídeo com autoplay mudo<span>teste de 9:16 acima deve rodar</span></div><div class="v">aguardando</div></li>
+    <li id="c-net" data-s="warn"><i class="dot"></i><div class="t">Internet<span>checa o servidor a cada 10s</span></div><div class="v">aguardando</div></li>
+    <li id="c-load" data-s="warn"><i class="dot"></i><div class="t">Recarregamentos<span>se "aberta há" zera no loop, o Yeloo recarrega a página</span></div><div class="v">aguardando</div></li>
+    <li id="c-sw" data-s="warn"><i class="dot"></i><div class="t">Cache offline (service worker)<span>necessário para o player real</span></div><div class="v">aguardando</div></li>
+  </ul>
+</main>
+
+<script>
+(function(){
+  var $ = function(id){return document.getElementById(id)};
+  var t0 = Date.now();
+  var pad = function(n){return (n<10?'0':'')+n};
+  var hms = function(d){return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())};
+  var dur = function(ms){
+    var s=Math.round(ms/1000), m=Math.floor(s/60), h=Math.floor(m/60);
+    return h? h+'h '+pad(m%60)+'min' : m? m+'min '+pad(s%60)+'s' : s+'s';
+  };
+  function set(id, state, text){
+    var li=$(id); li.setAttribute('data-s',state); li.querySelector('.v').textContent=text;
+  }
+  function store(k, v){
+    try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v); return v; }
+    catch(e){ return null; }
+  }
+
+  /* resolução e orientação */
+  function dims(){
+    var w=window.innerWidth, h=window.innerHeight, r=h/w;
+    $('res').textContent=w+'×'+h;
+    $('ratio').textContent=(r>=1? '1:'+r.toFixed(2) : r.toFixed(2)+':1');
+    var vert=h>w;
+    $('orient').innerHTML='<b style="color:'+(vert?'var(--ok)':'var(--bad)')+'">'+(vert?'vertical':'horizontal')+'</b>';
+  }
+  dims(); window.addEventListener('resize',dims);
+
+  /* relógio, uptime e prova de JavaScript */
+  $('loadedAt').textContent=hms(new Date(t0));
+  var ticks=0;
+  setInterval(function(){
+    $('clock').textContent=hms(new Date());
+    $('uptime').textContent=dur(Date.now()-t0);
+    ticks++;
+    if(ticks===3) set('c-js','ok','rodando');
+  },1000);
+
+  /* recarregamentos: guarda os horários de abertura */
+  var log=[];
+  try{ log=JSON.parse(store('loadlog')||'[]'); }catch(e){ log=[]; }
+  if(store('probe','1')===null){
+    set('c-load','warn','armazenamento bloqueado');
+  }else{
+    log.push(t0); log=log.slice(-6);
+    store('loadlog',JSON.stringify(log));
+    var n=log.length;
+    if(n<2){ set('c-load','warn','1ª abertura – aguarde o loop'); }
+    else{
+      var gap=log[n-1]-log[n-2];
+      set('c-load','warn', n+' aberturas · última há '+dur(gap)+' da anterior');
+    }
+  }
+
+  /* vídeo */
+  var vid=$('vid');
+  function vidOk(){ set('c-vid','ok','tocando'); }
+  vid.addEventListener('playing',vidOk);
+  vid.addEventListener('error',function(){ set('c-vid','bad','erro ao carregar'); });
+  var p=vid.play();
+  if(p&&p.catch) p.catch(function(){ set('c-vid','bad','autoplay bloqueado'); });
+  setTimeout(function(){ if(vid.paused) set('c-vid','bad','não iniciou em 6s'); },6000);
+
+  /* internet: ping no próprio servidor, sem cache */
+  var offSince=null;
+  function ping(){
+    var u='sw.js?ping='+Date.now();
+    fetch(u,{cache:'no-store'}).then(function(r){
+      if(!r.ok) throw 0;
+      if(offSince){
+        var d=Date.now()-offSince; offSince=null;
+        store('lastoff',dur(d));
+        set('c-net','ok','voltou (ficou '+dur(d)+' offline)');
+      }else{
+        var last=store('lastoff');
+        set('c-net','ok','online'+(last?' · última queda '+last:''));
+      }
+    }).catch(function(){
+      if(!offSince) offSince=Date.now();
+      set('c-net','bad','OFFLINE há '+dur(Date.now()-offSince));
+    });
+  }
+  ping(); setInterval(ping,10000);
+
+  /* service worker */
+  if(!('serviceWorker' in navigator)){
+    set('c-sw','bad','não suportado neste navegador');
+  }else{
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      return navigator.serviceWorker.ready;
+    }).then(function(){
+      set('c-sw','ok','ativo');
+    }).catch(function(e){
+      set('c-sw','bad','falhou: '+(e&&e.name?e.name:'erro'));
+    });
+  }
+})();
+</script>
+</body>
+</html>

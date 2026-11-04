@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Player de stories – vertical</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#fff}
+  #stage{position:fixed;inset:0;opacity:0;transition:opacity .4s}
+  #stage.on{opacity:1}
+  #stage img,#stage video{width:100%;height:100%;object-fit:contain;background:#000}
+  body.cover #stage img,body.cover #stage video{object-fit:cover}
+  #bar{position:fixed;top:0;left:0;height:.7vw;width:100%;background:#ffb020;transform:scaleX(0);
+    transform-origin:left;z-index:3}
+  #bar.run{transform:scaleX(1);transition-property:transform;transition-timing-function:linear}
+  #cta{position:fixed;left:0;right:0;bottom:0;z-index:2;padding:6vw 5vw 4.5vw;font-size:4.2vw;
+    font-weight:600;line-height:1.25;text-align:center;
+    background:linear-gradient(transparent,rgba(0,0,0,.72))}
+  #cta:empty{display:none}
+  #card{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;
+    padding:10vw;font-size:8vw;font-weight:700;line-height:1.2;background:#0e1116}
+  #dbg{position:fixed;left:1vw;top:1.5vw;z-index:5;font:2.6vw/1.3 monospace;color:#3ddc84;
+    background:rgba(0,0,0,.6);padding:.8vw 1.2vw;display:none;white-space:pre}
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div id="stage"></div>
+<div id="card"></div>
+<div id="cta"></div>
+<div id="dbg"></div>
+
+<script>
+/*
+  Parâmetros da URL (todos opcionais):
+    ?p=URL da playlist (padrão: playlist.json)   ?fit=cover (preenche a zona; padrão: contain)
+    ?sync=segundos entre consultas (padrão 60)   ?debug=1 (mostra status no canto)
+*/
+(function(){
+  var Q = new URLSearchParams(location.search);
+  var PL = Q.get('p') || 'playlist.json';
+  var SYNC = (+Q.get('sync') || 60) * 1000;
+  var MAXVID = 30000;                       // vídeo nunca passa de 30s na tela
+  var CN = 'player-media-v1';
+  var LS = 'playlist:' + PL;
+  if (Q.get('fit') === 'cover') document.body.classList.add('cover');
+
+  var $ = function(id){ return document.getElementById(id); };
+  var stage = $('stage'), bar = $('bar'), cta = $('cta'), card = $('card'), dbg = $('dbg');
+  var absURL = function(u, base){ try { return new URL(u, base || location.href).href; } catch(e){ return u; } };
+  var wait = function(ms){ return new Promise(function(r){ setTimeout(r, ms); }); };
+
+  var plBase = absURL(PL);
+  var queue = [], fb = [], blobs = {}, handle = '';
+  var state = { online: null, lastSync: 0, shown: 0, err: '' };
+
+  function live(it){ return !it.expires || Date.parse(it.expires) > Date.now(); }
+
+  /* ---------- mídia: baixa uma vez, guarda no Cache API e serve de lá ---------- */
+  async function media(src){
+    var u = absURL(src, plBase);
+    if (blobs[u]) return blobs[u];
+    try {
+      var c = await caches.open(CN);
+      var m = await c.match(u);
+      if (!m) {
+        var f = await fetch(u);
+        if (!f.ok) throw new Error(f.status);
+        await c.put(u, f.clone());
+        m = f;
+      }
+      return (blobs[u] = URL.createObjectURL(await m.blob()));
+    } catch(e) {
+      return u;                              // sem cache: usa a URL direta
+    }
+  }
+
+  async function prepare(list){
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      if (!it || !it.src || !live(it)) continue;
+      out.push({ id: it.id, type: it.type === 'video' ? 'video' : 'image',
+                 url: await media(it.src), duration: it.duration, expires: it.expires });
+    }
+    return out;
+  }
+
+  async function prune(data){
+    try {
+      var keep = {};
+      (data.items || []).concat(data.fallback || []).forEach(function(it){ if (it.src) keep[absURL(it.src, plBase)] = 1; });
+      var c = await caches.open(CN), keys = await c.keys();
+      for (var i = 0; i < keys.length; i++) {
+        if (!keep[keys[i].url]) { await c.delete(keys[i]); }
+      }
+      Object.keys(blobs).forEach(function(u){
+        if (!keep[u]) { URL.revokeObjectURL(blobs[u]); delete blobs[u]; }
+      });
+    } catch(e){}
+  }
+
+  async function apply(data){
+    handle = data.handle || '';
+    cta.textContent = data.cta || '';
+    var q = await prepare(data.items || []);
+    var f = await prepare(data.fallback || []);
+    queue = q; fb = f;                       // troca de uma vez, sem interromper o loop
+    prune(data);
+  }
+
+  /* ---------- sincronização com a playlist ---------- */
+  async function sync(){
+    try {
+      var r = await fetch(PL + (PL.indexOf('?') < 0 ? '?' : '&') + 't=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var data = await r.json();
+      try { localStorage.setItem(LS, JSON.stringify(data)); } catch(e){}
+      await apply(data);
+      state.online = true; state.lastSync = Date.now(); state.err = '';
+    } catch(e) {
+      state.online = false; state.err = String(e && e.message || e);
+    }
+  }
+
+  /* ---------- exibição ---------- */
+  function show(it){
+    return new Promise(function(done){
+      var el, finished = false, timer;
+      function end(){
+        if (finished) return; finished = true; clearTimeout(timer);
+        stage.classList.remove('on');
+        bar.classList.remove('run'); bar.style.transitionDuration = '0s';
+        setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); done(); }, 420);
+      }
+      function start(ms){
+        bar.style.transitionDuration = '0s'; bar.classList.remove('run');
+        void bar.offsetWidth;
+        bar.style.transitionDuration = (ms / 1000) + 's'; bar.classList.add('run');
+        timer = setTimeout(end, ms);
+      }
+      if (it.type === 'video') {
+        el = document.createElement('video');
+        el.muted = true; el.playsInline = true; el.autoplay = true;
+        el.onloadedmetadata = function(){
+          var ms = Math.min(MAXVID, (isFinite(el.duration) ? el.duration * 1000 : MAXVID) + 300);
+          stage.classList.add('on'); start(ms);
+        };
+        el.onended = end;
+        el.onerror = function(){ end(); };
+        el.src = it.url;
+        stage.appendChild(el);
+        var p = el.play(); if (p && p.catch) p.catch(function(){});
+        timer = setTimeout(end, 8000);       // se o vídeo não iniciar em 8s, pula
+      } else {
+        el = document.createElement('img');
+        el.onload = function(){ stage.classList.add('on'); start((it.duration || 8) * 1000); };
+        el.onerror = function(){ end(); };
+        el.src = it.url;
+        stage.appendChild(el);
+      }
+      state.shown++;
+    });
+  }
+
+  async function showCard(){
+    card.textContent = handle ? 'Marque ' + handle + ' nos seus stories' : 'Em breve';
+    card.style.display = 'flex';
+    await wait(8000);
+    card.style.display = 'none';
+  }
+
+  var idx = 0;
+  async function loop(){
+    for (;;) {
+      var list = queue.filter(live);
+      if (!list.length) list = fb.filter(live);
+      if (!list.length) { await showCard(); continue; }
+      await show(list[idx++ % list.length]);
+    }
+  }
+
+  /* ---------- diagnóstico opcional ---------- */
+  if (Q.has('debug')) {
+    dbg.style.display = 'block';
+    setInterval(function(){
+      var ago = state.lastSync ? Math.round((Date.now() - state.lastSync) / 1000) + 's' : 'nunca';
+      dbg.textContent = 'sync: ' + (state.online === null ? '...' : state.online ? 'ok' : 'FALHOU') +
+        ' (há ' + ago + ')\nstories: ' + queue.length + ' · reserva: ' + fb.length +
+        '\nexibidos: ' + state.shown + (state.err ? '\nerro: ' + state.err : '');
+    }, 1000);
+  }
+
+  /* ---------- início ---------- */
+  (async function(){
+    var hadSaved = false;
+    try {                                    // abre já com a última playlist salva
+      var saved = localStorage.getItem(LS);
+      if (saved) { await apply(JSON.parse(saved)); hadSaved = true; }
+    } catch(e){}
+    if (hadSaved) { loop(); await sync(); }
+    else { await sync(); loop(); }           // 1ª abertura: espera a playlist antes de exibir
+    setInterval(sync, SYNC);
+  })();
+})();
+</script>
+</body>
+</html>

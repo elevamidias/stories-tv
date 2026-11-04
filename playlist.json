@@ -1,0 +1,13 @@
+{
+  "handle": "@suaacademia",
+  "cta": "Marque @suaacademia nos seus stories e apareça aqui",
+  "updated": "2026-11-03T12:00:00Z",
+  "items": [
+    { "id": "s1", "type": "image", "src": "story1.jpg", "duration": 7 },
+    { "id": "s2", "type": "image", "src": "story2.jpg", "duration": 7 },
+    { "id": "s3", "type": "video", "src": "story3.mp4" }
+  ],
+  "fallback": [
+    { "id": "f1", "type": "image", "src": "fallback.jpg", "duration": 8 }
+  ]
+}
